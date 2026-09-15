@@ -29,14 +29,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install backend dependencies
-        working-directory: ./backend
-        run: npm install
+      - name: Create environment file
+        env:
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          cat > backend/.env << EOF
+          PORT=3000
+          DB_HOST=postgres
+          DB_PORT=5432
+          DB_USER=$DB_USER
+          DB_PASSWORD=$DB_PASSWORD
+          DB_NAME=$DB_NAME
+          EOF
 
       - name: Build Docker Compose
         run: docker compose build
@@ -114,7 +120,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
   # =========================
-  # CD - Deployment Placeholder
+  # CD - Deployment
   # =========================
 
   deploy:
@@ -128,6 +134,6 @@ jobs:
     steps:
       - name: Deployment status
         run: |
-          echo "Docker images successfully built and pushed."
+          echo "Docker images successfully built and pushed to GHCR."
           echo "AWS EC2 deployment will be configured next."
 
