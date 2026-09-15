@@ -17,19 +17,20 @@ env:
 
 jobs:
 
-  # =========================
-  # CI - Build & Verify
-  # =========================
+  # ==========================================
+  # CI - BUILD AND VERIFY
+  # ==========================================
 
   build:
     name: Build Application
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create environment file
+      - name: Create backend environment file
         env:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -48,17 +49,19 @@ jobs:
         run: docker compose build
 
       - name: Validate Docker Compose
-        run: docker compose config
+        run: docker compose config --quiet
 
-  # =========================
-  # CI - Frontend Check
-  # =========================
+
+  # ==========================================
+  # CI - FRONTEND CHECK
+  # ==========================================
 
   frontend-check:
     name: Check Frontend
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -69,12 +72,14 @@ jobs:
           test -f frontend/script.js
           echo "Frontend files are present."
 
-  # =========================
-  # CD - Build & Push Images
-  # =========================
+
+  # ==========================================
+  # CD - BUILD AND PUSH TO DOCKER HUB
+  # ==========================================
 
   build-and-push:
-    name: Build & Push Docker Images
+    name: Build and Push Docker Images
+
     needs:
       - build
       - frontend-check
@@ -84,6 +89,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -96,7 +102,7 @@ jobs:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build & Push Backend Image
+      - name: Build and Push Backend
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -105,7 +111,7 @@ jobs:
             ${{ env.BACKEND_IMAGE }}:latest
             ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
-      - name: Build & Push Frontend Image
+      - name: Build and Push Frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -114,12 +120,14 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-  # =========================
-  # CD - Deployment
-  # =========================
+
+  # ==========================================
+  # CD - DEPLOY TO AWS EC2
+  # ==========================================
 
   deploy:
-    name: Deploy
+    name: Deploy to AWS EC2
+
     needs: build-and-push
 
     runs-on: ubuntu-latest
@@ -127,7 +135,201 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Deployment status
-        run: |
-          echo "Docker images successfully built and pushed to Docker Hub."
-          echo "AWS EC2 deployment will be configured next."
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy database schema to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.HOST_IP }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_KEY }}
+          port: 22
+          source: "database/init.sql"
+          target: "/home/ubuntu/database/"
+
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+
+        env:
+          BACKEND_IMAGE: thabsira/task-manager-backend
+          FRONTEND_IMAGE: thabsira/task-manager-frontend
+          IMAGE_TAG: ${{ github.sha }}
+
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+
+        with:
+          host: ${{ vars.HOST_IP }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_KEY }}
+          port: 22
+
+          envs: BACKEND_IMAGE,FRONTEND_IMAGE,IMAGE_TAG,DB_USER,DB_PASSWORD,DB_NAME
+
+          script: |
+
+            set -e
+
+            echo "======================================"
+            echo "Starting EC2 deployment"
+            echo "======================================"
+
+            # Install Docker if needed
+
+            if ! command -v docker >/dev/null 2>&1; then
+
+              echo "Docker not found."
+              echo "Installing Docker..."
+
+              sudo apt-get update
+
+              sudo apt-get install -y docker.io
+
+              sudo systemctl enable docker
+              sudo systemctl start docker
+
+              echo "Docker installed successfully."
+
+            else
+
+              echo "Docker is already installed."
+
+            fi
+
+
+            # Check Docker
+
+            sudo docker --version
+
+
+            # Create Docker network
+
+            echo "Creating Docker network..."
+
+            sudo docker network create task-network 2>/dev/null || true
+
+
+            # Remove old containers
+
+            echo "Removing old containers..."
+
+            sudo docker rm -f task-manager-frontend 2>/dev/null || true
+            sudo docker rm -f task-manager-backend 2>/dev/null || true
+            sudo docker rm -f task-manager-postgres 2>/dev/null || true
+
+
+            # Pull images
+
+            echo "Pulling backend image..."
+
+            sudo docker pull ${BACKEND_IMAGE}:${IMAGE_TAG}
+
+            echo "Pulling frontend image..."
+
+            sudo docker pull ${FRONTEND_IMAGE}:${IMAGE_TAG}
+
+            echo "Pulling PostgreSQL image..."
+
+            sudo docker pull postgres:16-alpine
+
+
+            # Create PostgreSQL volume
+
+            sudo docker volume create task-manager-postgres-data
+
+
+            # Start PostgreSQL
+
+            echo "Starting PostgreSQL..."
+
+            sudo docker run -d \
+              --name task-manager-postgres \
+              --network task-network \
+              -e POSTGRES_USER="${DB_USER}" \
+              -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
+              -e POSTGRES_DB="${DB_NAME}" \
+              -v task-manager-postgres-data:/var/lib/postgresql/data \
+              -v /home/ubuntu/database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
+              postgres:16-alpine
+
+
+            # Wait for PostgreSQL
+
+            echo "Waiting for PostgreSQL..."
+
+            for i in {1..30}
+            do
+
+              if sudo docker exec task-manager-postgres \
+                pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1
+              then
+
+                echo "PostgreSQL is ready."
+
+                break
+
+              fi
+
+              echo "Waiting... attempt $i"
+
+              sleep 2
+
+            done
+
+
+            # Start Backend
+
+            echo "Starting backend..."
+
+            sudo docker run -d \
+              --name task-manager-backend \
+              --network task-network \
+              -p 3000:3000 \
+              -e PORT=3000 \
+              -e DB_HOST=task-manager-postgres \
+              -e DB_PORT=5432 \
+              -e DB_USER="${DB_USER}" \
+              -e DB_PASSWORD="${DB_PASSWORD}" \
+              -e DB_NAME="${DB_NAME}" \
+              ${BACKEND_IMAGE}:${IMAGE_TAG}
+
+
+            # Start Frontend
+
+            echo "Starting frontend..."
+
+            sudo docker run -d \
+              --name task-manager-frontend \
+              --network task-network \
+              -p 8080:80 \
+              ${FRONTEND_IMAGE}:${IMAGE_TAG}
+
+
+            # Show containers
+
+            echo ""
+            echo "======================================"
+            echo "Running Containers"
+            echo "======================================"
+
+            sudo docker ps
+
+
+            # Backend logs
+
+            echo ""
+            echo "======================================"
+            echo "Backend Logs"
+            echo "======================================"
+
+            sudo docker logs --tail 20 task-manager-backend
+
+
+            echo ""
+            echo "======================================"
+            echo "Deployment Completed Successfully!"
+            echo "======================================"
