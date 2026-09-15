@@ -142,10 +142,10 @@ jobs:
 
 
       # ==========================================
-      # PREPARE DATABASE DIRECTORY ON EC2
+      # CREATE DATABASE DIRECTORY
       # ==========================================
 
-      - name: Create database directory on EC2
+      - name: Prepare database directory
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ vars.HOST_IP }}
@@ -170,11 +170,11 @@ jobs:
           port: 22
 
           source: "database/init.sql"
-          target: "/home/ubuntu/task-manager/database/"
+          target: "/home/ubuntu/task-manager/"
 
 
       # ==========================================
-      # DEPLOY APPLICATION
+      # DEPLOY TO EC2
       # ==========================================
 
       - name: Deploy to EC2
@@ -235,6 +235,27 @@ jobs:
 
 
             # ==========================================
+            # PREPARE DATABASE FILE
+            # ==========================================
+
+            echo "Preparing database schema..."
+
+            sudo mkdir -p /home/ubuntu/task-manager/database
+
+            sudo rm -rf /home/ubuntu/task-manager/database/init.sql
+
+            sudo mv /home/ubuntu/task-manager/init.sql \
+              /home/ubuntu/task-manager/database/init.sql
+
+            sudo chmod 644 \
+              /home/ubuntu/task-manager/database/init.sql
+
+
+            echo "Database schema:"
+            sudo ls -l /home/ubuntu/task-manager/database/init.sql
+
+
+            # ==========================================
             # CREATE DOCKER NETWORK
             # ==========================================
 
@@ -244,7 +265,7 @@ jobs:
 
 
             # ==========================================
-            # REMOVE OLD APPLICATION CONTAINERS
+            # REMOVE OLD CONTAINERS
             # ==========================================
 
             echo "Removing old containers..."
@@ -252,6 +273,19 @@ jobs:
             sudo docker rm -f task-manager-frontend 2>/dev/null || true
             sudo docker rm -f task-manager-backend 2>/dev/null || true
             sudo docker rm -f task-manager-postgres 2>/dev/null || true
+
+
+            # ==========================================
+            # REMOVE OLD DATABASE VOLUME
+            # ==========================================
+            #
+            # First deployment after fixing the schema.
+            # This allows init.sql to run again.
+            #
+
+            echo "Removing old PostgreSQL volume..."
+
+            sudo docker volume rm task-manager-postgres-data 2>/dev/null || true
 
 
             # ==========================================
@@ -325,20 +359,13 @@ jobs:
 
 
             # ==========================================
-            # CHECK POSTGRES STATUS
+            # VERIFY DATABASE
             # ==========================================
 
-            if ! sudo docker exec task-manager-postgres \
-              pg_isready \
-              -U "${DB_USER}" \
-              -d "${DB_NAME}" >/dev/null 2>&1
-            then
+            echo "Checking database tables..."
 
-              echo "PostgreSQL failed to start."
-              sudo docker logs task-manager-postgres
-              exit 1
-
-            fi
+            sudo docker exec task-manager-postgres \
+              psql -U "${DB_USER}" -d "${DB_NAME}" -c "\dt"
 
 
             # ==========================================
@@ -381,7 +408,7 @@ jobs:
 
 
             # ==========================================
-            # SHOW RUNNING CONTAINERS
+            # SHOW CONTAINERS
             # ==========================================
 
             echo ""
@@ -393,7 +420,7 @@ jobs:
 
 
             # ==========================================
-            # CHECK FRONTEND
+            # FRONTEND LOGS
             # ==========================================
 
             echo ""
@@ -405,7 +432,7 @@ jobs:
 
 
             # ==========================================
-            # CHECK BACKEND
+            # BACKEND LOGS
             # ==========================================
 
             echo ""
@@ -417,7 +444,7 @@ jobs:
 
 
             # ==========================================
-            # FINAL STATUS
+            # FINAL MESSAGE
             # ==========================================
 
             echo ""
