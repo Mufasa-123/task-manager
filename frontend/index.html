@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Task Manager</h1>
+      <button id="newTaskBtn" class="btn btn-primary">+ New Task</button>
+    </header>
+
+    <section class="filters">
+      <button class="filter-btn active" data-status="">All</button>
+      <button class="filter-btn" data-status="pending">Pending</button>
+      <button class="filter-btn" data-status="in_progress">In Progress</button>
+      <button class="filter-btn" data-status="completed">Completed</button>
+    </section>
+
+    <section id="taskList" class="task-list">
+      <p class="empty-state" id="emptyState">Loading tasks...</p>
+    </section>
+  </div>
+
+  <!-- Modal for create/edit -->
+  <div id="taskModal" class="modal hidden">
+    <div class="modal-content">
+      <h2 id="modalTitle">New Task</h2>
+      <form id="taskForm">
+        <input type="hidden" id="taskId" />
+        <label>Title
+          <input type="text" id="title" required maxlength="255" />
+        </label>
+        <label>Description
+          <textarea id="description" rows="3"></textarea>
+        </label>
+        <div class="form-row">
+          <label>Status
+            <select id="status">
+              <option value="pending">Pending</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+            </select>
+          </label>
+          <label>Priority
+            <select id="priority">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+        </div>
+        <label>Due Date
+          <input type="date" id="due_date" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="cancelBtn" class="btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
