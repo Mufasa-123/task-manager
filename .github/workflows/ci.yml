@@ -18,15 +18,13 @@ env:
 jobs:
 
   # ==========================================
-  # CI - BUILD AND VERIFY
+  # BUILD
   # ==========================================
-
   build:
     name: Build Application
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -53,15 +51,13 @@ jobs:
 
 
   # ==========================================
-  # CI - FRONTEND CHECK
+  # FRONTEND CHECK
   # ==========================================
-
   frontend-check:
     name: Check Frontend
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -75,12 +71,10 @@ jobs:
 
 
   # ==========================================
-  # CD - BUILD AND PUSH TO DOCKER HUB
+  # BUILD & PUSH DOCKER IMAGES
   # ==========================================
-
   build-and-push:
     name: Build and Push Docker Images
-
     needs:
       - build
       - frontend-check
@@ -90,12 +84,13 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-
       - name: Checkout code
         uses: actions/checkout@v4
 
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -103,29 +98,40 @@ jobs:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+
+      # ------------------------------------------
+      # BACKEND IMAGE
+      # ------------------------------------------
       - name: Build and Push Backend
         uses: docker/build-push-action@v6
+
         with:
           context: ./backend
           push: true
+
           tags: |
             ${{ env.BACKEND_IMAGE }}:latest
             ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
+
+      # ------------------------------------------
+      # FRONTEND IMAGE
+      # ------------------------------------------
       - name: Build and Push Frontend
         uses: docker/build-push-action@v6
+
         with:
           context: ./frontend
           push: true
+
           tags: |
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
 
   # ==========================================
-  # CD - DEPLOY TO AWS EC2
+  # DEPLOY TO AWS EC2
   # ==========================================
-
   deploy:
     name: Deploy to AWS EC2
 
@@ -137,16 +143,19 @@ jobs:
 
     steps:
 
+      # ------------------------------------------
+      # CHECKOUT
+      # ------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
 
-      # ==========================================
+      # ------------------------------------------
       # CREATE DATABASE DIRECTORY
-      # ==========================================
-
+      # ------------------------------------------
       - name: Prepare database directory
         uses: appleboy/ssh-action@v1.2.0
+
         with:
           host: ${{ vars.HOST_IP }}
           username: ubuntu
@@ -157,12 +166,12 @@ jobs:
             mkdir -p /home/ubuntu/task-manager/database
 
 
-      # ==========================================
-      # COPY DATABASE SCHEMA
-      # ==========================================
-
+      # ------------------------------------------
+      # COPY init.sql TO EC2
+      # ------------------------------------------
       - name: Copy database schema to EC2
         uses: appleboy/scp-action@v0.1.7
+
         with:
           host: ${{ vars.HOST_IP }}
           username: ubuntu
@@ -170,19 +179,24 @@ jobs:
           port: 22
 
           source: "database/init.sql"
+
           target: "/home/ubuntu/task-manager/"
 
+          strip_components: 1
 
-      # ==========================================
-      # DEPLOY TO EC2
-      # ==========================================
+          overwrite: true
 
+
+      # ------------------------------------------
+      # DEPLOY APPLICATION
+      # ------------------------------------------
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.2.0
 
         env:
           BACKEND_IMAGE: thabsira/task-manager-backend
           FRONTEND_IMAGE: thabsira/task-manager-frontend
+
           IMAGE_TAG: ${{ github.sha }}
 
           DB_USER: ${{ secrets.DB_USER }}
@@ -207,9 +221,9 @@ jobs:
             echo "======================================"
 
 
-            # ==========================================
-            # INSTALL DOCKER IF NEEDED
-            # ==========================================
+            # --------------------------------------
+            # INSTALL DOCKER IF REQUIRED
+            # --------------------------------------
 
             if ! command -v docker >/dev/null 2>&1; then
 
@@ -217,9 +231,11 @@ jobs:
               echo "Installing Docker..."
 
               sudo apt-get update
+
               sudo apt-get install -y docker.io
 
               sudo systemctl enable docker
+
               sudo systemctl start docker
 
               echo "Docker installed successfully."
@@ -234,91 +250,136 @@ jobs:
             sudo docker --version
 
 
-            # ==========================================
-            # PREPARE DATABASE FILE
-            # ==========================================
+            # --------------------------------------
+            # VERIFY DATABASE SCHEMA
+            # --------------------------------------
 
-            echo "Preparing database schema..."
+            echo "======================================"
+            echo "Checking database schema"
+            echo "======================================"
 
             sudo mkdir -p /home/ubuntu/task-manager/database
 
-            sudo rm -rf /home/ubuntu/task-manager/database/init.sql
+            if [ ! -f /home/ubuntu/task-manager/database/init.sql ]; then
 
-            sudo mv /home/ubuntu/task-manager/init.sql \
-              /home/ubuntu/task-manager/database/init.sql
+              echo "ERROR: init.sql was not copied correctly."
+
+              echo "Searching for init.sql..."
+
+              sudo find /home/ubuntu/task-manager \
+                -name "init.sql" \
+                -type f \
+                -ls
+
+              exit 1
+
+            fi
 
             sudo chmod 644 \
               /home/ubuntu/task-manager/database/init.sql
 
+            echo "Database schema found:"
 
-            echo "Database schema:"
-            sudo ls -l /home/ubuntu/task-manager/database/init.sql
+            sudo ls -lh \
+              /home/ubuntu/task-manager/database/init.sql
 
 
-            # ==========================================
+            # --------------------------------------
             # CREATE DOCKER NETWORK
-            # ==========================================
+            # --------------------------------------
 
-            echo "Creating Docker network..."
+            echo "======================================"
+            echo "Creating Docker network"
+            echo "======================================"
 
             sudo docker network create task-network 2>/dev/null || true
 
 
-            # ==========================================
+            # --------------------------------------
             # REMOVE OLD CONTAINERS
-            # ==========================================
+            # --------------------------------------
 
-            echo "Removing old containers..."
+            echo "======================================"
+            echo "Removing old containers"
+            echo "======================================"
 
             sudo docker rm -f task-manager-frontend 2>/dev/null || true
+
             sudo docker rm -f task-manager-backend 2>/dev/null || true
+
             sudo docker rm -f task-manager-postgres 2>/dev/null || true
 
 
-            # ==========================================
+            # --------------------------------------
             # REMOVE OLD DATABASE VOLUME
-            # ==========================================
+            # --------------------------------------
             #
-            # First deployment after fixing the schema.
-            # This allows init.sql to run again.
+            # IMPORTANT:
+            # This is being done now only so that
+            # the corrected init.sql runs on the
+            # existing broken deployment.
+            #
+            # Later, once the database works,
+            # REMOVE this volume deletion to
+            # preserve database data.
             #
 
             echo "Removing old PostgreSQL volume..."
 
-            sudo docker volume rm task-manager-postgres-data 2>/dev/null || true
+            sudo docker volume rm \
+              task-manager-postgres-data 2>/dev/null || true
 
 
-            # ==========================================
-            # PULL IMAGES
-            # ==========================================
+            # --------------------------------------
+            # PULL BACKEND IMAGE
+            # --------------------------------------
 
-            echo "Pulling backend image..."
+            echo "======================================"
+            echo "Pulling backend image"
+            echo "======================================"
 
-            sudo docker pull ${BACKEND_IMAGE}:${IMAGE_TAG}
-
-
-            echo "Pulling frontend image..."
-
-            sudo docker pull ${FRONTEND_IMAGE}:${IMAGE_TAG}
+            sudo docker pull \
+              ${BACKEND_IMAGE}:${IMAGE_TAG}
 
 
-            echo "Pulling PostgreSQL image..."
+            # --------------------------------------
+            # PULL FRONTEND IMAGE
+            # --------------------------------------
+
+            echo "======================================"
+            echo "Pulling frontend image"
+            echo "======================================"
+
+            sudo docker pull \
+              ${FRONTEND_IMAGE}:${IMAGE_TAG}
+
+
+            # --------------------------------------
+            # PULL POSTGRES
+            # --------------------------------------
+
+            echo "======================================"
+            echo "Pulling PostgreSQL image"
+            echo "======================================"
 
             sudo docker pull postgres:16-alpine
 
 
-            # ==========================================
-            # CREATE POSTGRES VOLUME
-            # ==========================================
+            # --------------------------------------
+            # CREATE DATABASE VOLUME
+            # --------------------------------------
 
-            sudo docker volume create task-manager-postgres-data
+            sudo docker volume create \
+              task-manager-postgres-data
 
 
-            # ==========================================
-            # START POSTGRESQL
-            # ==========================================
+            # --------------------------------------
+            # START POSTGRES
+            # --------------------------------------
 
-            echo "Starting PostgreSQL..."
+            echo "======================================"
+            echo "Starting PostgreSQL"
+            echo "======================================"
 
             sudo docker run -d \
               --name task-manager-postgres \
@@ -331,11 +392,13 @@ jobs:
               postgres:16-alpine
 
 
-            # ==========================================
-            # WAIT FOR POSTGRESQL
-            # ==========================================
+            # --------------------------------------
+            # WAIT FOR POSTGRES
+            # --------------------------------------
 
-            echo "Waiting for PostgreSQL..."
+            echo "======================================"
+            echo "Waiting for PostgreSQL"
+            echo "======================================"
 
             for i in {1..30}
             do
@@ -347,6 +410,7 @@ jobs:
               then
 
                 echo "PostgreSQL is ready."
+
                 break
 
               fi
@@ -358,21 +422,47 @@ jobs:
             done
 
 
-            # ==========================================
-            # VERIFY DATABASE
-            # ==========================================
+            # --------------------------------------
+            # CHECK POSTGRES STATUS
+            # --------------------------------------
 
-            echo "Checking database tables..."
+            if ! sudo docker exec task-manager-postgres \
+              pg_isready \
+              -U "${DB_USER}" \
+              -d "${DB_NAME}" >/dev/null 2>&1
+            then
+
+              echo "ERROR: PostgreSQL failed to start."
+
+              sudo docker logs task-manager-postgres
+
+              exit 1
+
+            fi
+
+
+            # --------------------------------------
+            # CHECK DATABASE TABLES
+            # --------------------------------------
+
+            echo "======================================"
+            echo "Checking database tables"
+            echo "======================================"
 
             sudo docker exec task-manager-postgres \
-              psql -U "${DB_USER}" -d "${DB_NAME}" -c "\dt"
+              psql \
+              -U "${DB_USER}" \
+              -d "${DB_NAME}" \
+              -c "\dt"
 
 
-            # ==========================================
+            # --------------------------------------
             # START BACKEND
-            # ==========================================
+            # --------------------------------------
 
-            echo "Starting backend..."
+            echo "======================================"
+            echo "Starting backend"
+            echo "======================================"
 
             sudo docker run -d \
               --name task-manager-backend \
@@ -387,11 +477,13 @@ jobs:
               ${BACKEND_IMAGE}:${IMAGE_TAG}
 
 
-            # ==========================================
+            # --------------------------------------
             # START FRONTEND
-            # ==========================================
+            # --------------------------------------
 
-            echo "Starting frontend..."
+            echo "======================================"
+            echo "Starting frontend"
+            echo "======================================"
 
             sudo docker run -d \
               --name task-manager-frontend \
@@ -400,18 +492,19 @@ jobs:
               ${FRONTEND_IMAGE}:${IMAGE_TAG}
 
 
-            # ==========================================
+            # --------------------------------------
             # WAIT FOR APPLICATION
-            # ==========================================
+            # --------------------------------------
+
+            echo "Waiting for application..."
 
             sleep 5
 
 
-            # ==========================================
+            # --------------------------------------
             # SHOW CONTAINERS
-            # ==========================================
+            # --------------------------------------
 
-            echo ""
             echo "======================================"
             echo "Running Containers"
             echo "======================================"
@@ -419,39 +512,40 @@ jobs:
             sudo docker ps
 
 
-            # ==========================================
+            # --------------------------------------
             # FRONTEND LOGS
-            # ==========================================
+            # --------------------------------------
 
-            echo ""
             echo "======================================"
             echo "Frontend Logs"
             echo "======================================"
 
-            sudo docker logs --tail 20 task-manager-frontend
+            sudo docker logs \
+              --tail 20 \
+              task-manager-frontend
 
 
-            # ==========================================
+            # --------------------------------------
             # BACKEND LOGS
-            # ==========================================
+            # --------------------------------------
 
-            echo ""
             echo "======================================"
             echo "Backend Logs"
             echo "======================================"
 
-            sudo docker logs --tail 20 task-manager-backend
+            sudo docker logs \
+              --tail 20 \
+              task-manager-backend
 
 
-            # ==========================================
-            # FINAL MESSAGE
-            # ==========================================
+            # --------------------------------------
+            # DEPLOYMENT COMPLETE
+            # --------------------------------------
 
-            echo ""
             echo "======================================"
             echo "Deployment Completed Successfully!"
             echo "======================================"
 
-            echo ""
             echo "Application URL:"
+
             echo "http://${HOST_IP}:8080"
