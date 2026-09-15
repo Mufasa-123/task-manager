@@ -70,6 +70,7 @@ jobs:
           test -f frontend/index.html
           test -f frontend/style.css
           test -f frontend/script.js
+          test -f frontend/nginx.conf
           echo "Frontend files are present."
 
 
@@ -139,6 +140,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+
+      # ==========================================
+      # PREPARE DATABASE DIRECTORY ON EC2
+      # ==========================================
+
+      - name: Create database directory on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ vars.HOST_IP }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_KEY }}
+          port: 22
+
+          script: |
+            mkdir -p /home/ubuntu/task-manager/database
+
+
+      # ==========================================
+      # COPY DATABASE SCHEMA
+      # ==========================================
+
       - name: Copy database schema to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -146,9 +168,14 @@ jobs:
           username: ubuntu
           key: ${{ secrets.AWS_EC2_KEY }}
           port: 22
-          source: "database/init.sql"
-          target: "/home/ubuntu/database/"
 
+          source: "database/init.sql"
+          target: "/home/ubuntu/task-manager/database/"
+
+
+      # ==========================================
+      # DEPLOY APPLICATION
+      # ==========================================
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.2.0
@@ -163,6 +190,7 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
 
         with:
+
           host: ${{ vars.HOST_IP }}
           username: ubuntu
           key: ${{ secrets.AWS_EC2_KEY }}
@@ -178,7 +206,10 @@ jobs:
             echo "Starting EC2 deployment"
             echo "======================================"
 
-            # Install Docker if needed
+
+            # ==========================================
+            # INSTALL DOCKER IF NEEDED
+            # ==========================================
 
             if ! command -v docker >/dev/null 2>&1; then
 
@@ -186,7 +217,6 @@ jobs:
               echo "Installing Docker..."
 
               sudo apt-get update
-
               sudo apt-get install -y docker.io
 
               sudo systemctl enable docker
@@ -201,19 +231,21 @@ jobs:
             fi
 
 
-            # Check Docker
-
             sudo docker --version
 
 
-            # Create Docker network
+            # ==========================================
+            # CREATE DOCKER NETWORK
+            # ==========================================
 
             echo "Creating Docker network..."
 
             sudo docker network create task-network 2>/dev/null || true
 
 
-            # Remove old containers
+            # ==========================================
+            # REMOVE OLD APPLICATION CONTAINERS
+            # ==========================================
 
             echo "Removing old containers..."
 
@@ -222,27 +254,35 @@ jobs:
             sudo docker rm -f task-manager-postgres 2>/dev/null || true
 
 
-            # Pull images
+            # ==========================================
+            # PULL IMAGES
+            # ==========================================
 
             echo "Pulling backend image..."
 
             sudo docker pull ${BACKEND_IMAGE}:${IMAGE_TAG}
 
+
             echo "Pulling frontend image..."
 
             sudo docker pull ${FRONTEND_IMAGE}:${IMAGE_TAG}
+
 
             echo "Pulling PostgreSQL image..."
 
             sudo docker pull postgres:16-alpine
 
 
-            # Create PostgreSQL volume
+            # ==========================================
+            # CREATE POSTGRES VOLUME
+            # ==========================================
 
             sudo docker volume create task-manager-postgres-data
 
 
-            # Start PostgreSQL
+            # ==========================================
+            # START POSTGRESQL
+            # ==========================================
 
             echo "Starting PostgreSQL..."
 
@@ -253,11 +293,13 @@ jobs:
               -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
               -e POSTGRES_DB="${DB_NAME}" \
               -v task-manager-postgres-data:/var/lib/postgresql/data \
-              -v /home/ubuntu/database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
+              -v /home/ubuntu/task-manager/database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
               postgres:16-alpine
 
 
-            # Wait for PostgreSQL
+            # ==========================================
+            # WAIT FOR POSTGRESQL
+            # ==========================================
 
             echo "Waiting for PostgreSQL..."
 
@@ -265,11 +307,12 @@ jobs:
             do
 
               if sudo docker exec task-manager-postgres \
-                pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1
+                pg_isready \
+                -U "${DB_USER}" \
+                -d "${DB_NAME}" >/dev/null 2>&1
               then
 
                 echo "PostgreSQL is ready."
-
                 break
 
               fi
@@ -281,7 +324,26 @@ jobs:
             done
 
 
-            # Start Backend
+            # ==========================================
+            # CHECK POSTGRES STATUS
+            # ==========================================
+
+            if ! sudo docker exec task-manager-postgres \
+              pg_isready \
+              -U "${DB_USER}" \
+              -d "${DB_NAME}" >/dev/null 2>&1
+            then
+
+              echo "PostgreSQL failed to start."
+              sudo docker logs task-manager-postgres
+              exit 1
+
+            fi
+
+
+            # ==========================================
+            # START BACKEND
+            # ==========================================
 
             echo "Starting backend..."
 
@@ -298,7 +360,9 @@ jobs:
               ${BACKEND_IMAGE}:${IMAGE_TAG}
 
 
-            # Start Frontend
+            # ==========================================
+            # START FRONTEND
+            # ==========================================
 
             echo "Starting frontend..."
 
@@ -309,7 +373,16 @@ jobs:
               ${FRONTEND_IMAGE}:${IMAGE_TAG}
 
 
-            # Show containers
+            # ==========================================
+            # WAIT FOR APPLICATION
+            # ==========================================
+
+            sleep 5
+
+
+            # ==========================================
+            # SHOW RUNNING CONTAINERS
+            # ==========================================
 
             echo ""
             echo "======================================"
@@ -319,7 +392,21 @@ jobs:
             sudo docker ps
 
 
-            # Backend logs
+            # ==========================================
+            # CHECK FRONTEND
+            # ==========================================
+
+            echo ""
+            echo "======================================"
+            echo "Frontend Logs"
+            echo "======================================"
+
+            sudo docker logs --tail 20 task-manager-frontend
+
+
+            # ==========================================
+            # CHECK BACKEND
+            # ==========================================
 
             echo ""
             echo "======================================"
@@ -329,7 +416,15 @@ jobs:
             sudo docker logs --tail 20 task-manager-backend
 
 
+            # ==========================================
+            # FINAL STATUS
+            # ==========================================
+
             echo ""
             echo "======================================"
             echo "Deployment Completed Successfully!"
             echo "======================================"
+
+            echo ""
+            echo "Application URL:"
+            echo "http://${HOST_IP}:8080"
